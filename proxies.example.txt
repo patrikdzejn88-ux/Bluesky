@@ -1,0 +1,10 @@
+# один прокси на строку. форматы:
+#   host:port
+#   host:port:user:pass
+#   user:pass@host:port
+#   http://user:pass@host:port   (или socks5://...)
+#
+# после прокси через | можно указать ссылку для смены IP:
+#   host:port:user:pass | http://change-ip-link
+# тогда перед каждым аккаунтом дёргаем ссылку и ждём новый IP.
+# без ссылки считаем, что прокси сам меняет IP на каждый запрос (rotating).
