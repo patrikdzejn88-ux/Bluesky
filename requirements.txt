@@ -1,2 +1,3 @@
+temptf>=0.1.0
 requests>=2.31.0
 colorama>=0.4.6

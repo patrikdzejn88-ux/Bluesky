@@ -2,77 +2,56 @@ from __future__ import annotations
 
 import random
 import re
-import secrets
 import time
-from typing import Optional
+from typing import Optional, Sequence
 
-import requests
+from temptf import Message, TempTFClient
 
-MAIL_SITE_URL = "https://mailporary.com/ru"
-MAIL_API_URL = "https://web.mailporary.com/api/v1"
-MAIL_DOMAINS = [
-    "suarj.com",
-    "mfxis.com",
-    "anogz.com",
-]
+MAIL_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("all", "all providers (gmail + high.edu.pl)"),
+    ("gmail", "gmail.com (dot + plus)"),
+    ("gmail-dot", "gmail.com (dot only)"),
+    ("gmail-plus", "gmail.com (plus only)"),
+    ("high.edu.pl", "high.edu.pl (edu)"),
+)
+MAIL_PROVIDERS = tuple(k for k, _ in MAIL_OPTIONS)
 
-
-_CODE_LINE_RE = re.compile(r"(?m)^\s*(\d{4,8})\s*$")
+_CODE_LINE_RE = re.compile(r"(?m)^\s*([A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8})?|\d{4,8})\s*$")
 _CODE_RE = re.compile(r"\b(\d{4,8})\b")
 
-
-def _request_id() -> str:
-    return secrets.token_hex(16)
+_client = TempTFClient(timeout=20.0)
 
 
-def generate_email() -> str:
-    local = "".join(random.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(10))
-    return f"{local}@{random.choice(MAIL_DOMAINS)}"
+def generate_email(providers: Optional[Sequence[str]] = None) -> str:
+    choice = random.choice(list(providers)) if providers else "all"
+    for attempt in range(3):
+        try:
+            if choice == "gmail":
+                return _client.create_gmail()
+            if choice == "gmail-dot":
+                return _client.create_gmail_dot()
+            if choice == "gmail-plus":
+                return _client.create_gmail_plus()
+            if choice == "outlook":
+                return _client.create_outlook()
+            if choice == "hotmail":
+                return _client.create_hotmail()
+            if choice == "high.edu.pl":
+                return _client.create_edu()
+            return _client.create_email(
+                providers=("gmail", "high.edu.pl"),
+                dot=True,
+                plus=True,
+            )
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(2 + attempt * 2)
+    return ""
 
 
-def authorize(session: Optional[requests.Session] = None) -> str:
-    s = session or requests.Session()
-    r = s.get(MAIL_SITE_URL, timeout=30)
-    r.raise_for_status()
-    m = re.search(r"eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+", r.text)
-    if not m:
-        raise RuntimeError("mailporary: JWT not found")
-    return m.group(0)
-
-
-def _headers(token: str) -> dict:
-    return {
-        "authorization": f"Bearer {token}",
-        "x-request-id": _request_id(),
-        "x-timestamp": str(int(time.time())),
-    }
-
-
-def inbox(session: requests.Session, token: str, mail: str) -> list:
-    r = session.get(
-        f"{MAIL_API_URL}/mailbox/{mail}",
-        headers=_headers(token),
-        timeout=30,
-    )
-    if r.status_code != 200:
-        return []
-    data = r.json()
-    return data if isinstance(data, list) else []
-
-
-def message_text(session: requests.Session, token: str, mail: str, msg_id: str) -> Optional[str]:
-    r = session.get(
-        f"{MAIL_API_URL}/mailbox/{mail}/{msg_id}",
-        headers=_headers(token),
-        timeout=30,
-    )
-    if r.status_code != 200:
-        return None
-    data = r.json()
-    body = data.get("body") or {}
-    text = body.get("text") or body.get("html") or ""
-    subject = data.get("subject") or ""
-    return f"{subject}\n{text}"
+def inbox(email: str) -> list[Message]:
+    return _client.get_messages(email)
 
 
 def extract_code(text: str) -> Optional[str]:
@@ -86,9 +65,7 @@ def extract_code(text: str) -> Optional[str]:
 
 
 def wait_code(
-    session: requests.Session,
-    token: str,
-    mail: str,
+    email: str,
     timeout: float = 120,
     poll: float = 4,
     seen_ids: Optional[set] = None,
@@ -96,13 +73,12 @@ def wait_code(
     seen = seen_ids if seen_ids is not None else set()
     end = time.time() + timeout
     while time.time() < end:
-        for msg in inbox(session, token, mail):
-            mid = str(msg.get("id", ""))
-            if not mid or mid in seen:
+        for msg in _client.get_messages(email):
+            mid = msg.id or f"{msg.date}:{msg.subject}"
+            if mid in seen:
                 continue
             seen.add(mid)
-            text = message_text(session, token, mail, mid)
-            code = extract_code(text or "")
+            code = extract_code(f"{msg.subject}\n{msg.text}")
             if code:
                 return code
         time.sleep(poll)

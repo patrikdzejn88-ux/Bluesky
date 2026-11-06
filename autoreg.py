@@ -70,6 +70,37 @@ def _ask_int(prompt: str, default: int) -> int:
         return default
 
 
+def _parse_providers(raw: str) -> list[str]:
+    selected: list[str] = []
+    for part in raw.replace(" ", ",").split(","):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if part.isdigit():
+            idx = int(part)
+            if 1 <= idx <= len(mail.MAIL_OPTIONS):
+                key = mail.MAIL_OPTIONS[idx - 1][0]
+                if key not in selected:
+                    selected.append(key)
+        elif part in mail.MAIL_PROVIDERS and part not in selected:
+            selected.append(part)
+    if not selected or "all" in selected:
+        return ["all"]
+    return selected
+
+
+def _ask_providers(raw_arg: str = "", no_prompt: bool = False) -> list[str]:
+    if raw_arg:
+        return _parse_providers(raw_arg)
+    if no_prompt:
+        return ["all"]
+    print(f"  {Fore.CYAN}mail providers:{Style.RESET_ALL}")
+    for i, (key, desc) in enumerate(mail.MAIL_OPTIONS, 1):
+        print(f"    {Fore.CYAN}{i}{Style.RESET_ALL}) {key:<12} {Fore.WHITE}{desc}{Style.RESET_ALL}")
+    raw = _ask("select (e.g. 1 or 2,5)", "1")
+    return _parse_providers(raw)
+
+
 def _clean_handle(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
@@ -114,9 +145,9 @@ def load_count() -> int:
         return 0
 
 
-def load_captcha_key(cli_key: str) -> str:
-    if cli_key:
-        return cli_key
+def load_captcha_key(key_arg: str) -> str:
+    if key_arg:
+        return key_arg
     env = os.environ.get("CAPTCHA_KEY", "")
     if env:
         return env
@@ -131,12 +162,13 @@ def _attempt(
     handle_base: Optional[str],
     captcha_key: str,
     proxy: Optional[dict],
+    providers: list[str],
 ) -> tuple[bool, str]:
     pwd = password or secrets.token_urlsafe(12)
     purl = proxy["url"] if proxy else None
     client = BskyClient(proxy=purl, log=log)
 
-    email = mail.generate_email()
+    email = mail.generate_email(providers=providers)
     log(f"  {tag}  {Fore.CYAN}···{Style.RESET_ALL}  {email}")
 
     handle = ""
@@ -183,6 +215,7 @@ def reg_one(
     handle_base: Optional[str],
     captcha_key: str,
     proxy: Optional[dict],
+    providers: list[str],
 ) -> tuple[bool, str]:
     tag = f"{Fore.WHITE}[{idx}/{total}]{Style.RESET_ALL}"
     last = f"  {tag}  {Fore.RED}fail{Style.RESET_ALL}"
@@ -190,7 +223,7 @@ def reg_one(
         try:
             if proxy:
                 proxy_util.rotate(proxy)
-            ok, line = _attempt(tag, password, handle_base, captcha_key, proxy)
+            ok, line = _attempt(tag, password, handle_base, captcha_key, proxy, providers)
             if ok:
                 return True, line
             last = line
@@ -213,6 +246,7 @@ def main() -> int:
     ap.add_argument("--password", default="")
     ap.add_argument("--nickname", default="", help="база хендла (пусто = random)")
     ap.add_argument("--count", type=int, default=0)
+    ap.add_argument("--provider", default="", help="почты: all, gmail, gmail-dot, gmail-plus, high.edu.pl")
     ap.add_argument("--captcha-key", default="", help="ключ hcaptchasolver.org (или captcha_key.txt)")
     ap.add_argument("--proxy", default="", help="один прокси, любой формат")
     ap.add_argument("--change-link", default="", help="ссылка смены IP для --proxy")
@@ -239,9 +273,12 @@ def main() -> int:
         password = _ask("password", password)
         nickname = _ask("handle base (empty=random)", nickname)
         count = _ask_int("accounts", count)
+        providers = _ask_providers(args.provider, no_prompt=False)
         if not captcha_key:
             captcha_key = _ask("captcha key")
         print()
+    else:
+        providers = _ask_providers(args.provider, no_prompt=True)
 
     if not captcha_key:
         print(f"  {Fore.RED}нет ключа капчи (--captcha-key / captcha_key.txt){Style.RESET_ALL}")
@@ -253,6 +290,7 @@ def main() -> int:
             ("accounts", f"{Fore.CYAN}{count}{Style.RESET_ALL}"),
             ("password", "*" * len(password)),
             ("handle", nickname or "random"),
+            ("mail", f"{Fore.CYAN}{','.join(providers)}{Style.RESET_ALL}"),
             ("proxies", str(len(plist)) if plist else "off"),
             ("captcha", "..." + captcha_key[-4:]),
             ("saved", str(load_count())),
@@ -271,6 +309,7 @@ def main() -> int:
             nickname or None,
             captcha_key,
             plist[(i - 1) % len(plist)] if plist else None,
+            providers,
         )
         log(line)
         if success:
